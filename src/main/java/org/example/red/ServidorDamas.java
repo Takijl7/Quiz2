@@ -202,4 +202,197 @@ public class ServidorDamas {
             }
         }, GestorPartida.TIEMPO_TURNO_CONFIGURABLE, TimeUnit.MILLISECONDS);
     }
+
+    // Cancela el temporizador anterior al cambiar de turno.
+    public synchronized void cancelarTemporizador() {
+        if (temporizador != null) {
+            temporizador.cancel(false);
+            temporizador = null;
+        }
+    }
+
+    // Finaliza la partida y comunica el resultado.
+    public synchronized void cerrarPartida(ResultadoPartida resultado) {
+
+        if (partidaCerrada) {
+            return;
+        }
+
+        partidaCerrada = true;
+        cancelarTemporizador();
+
+        if (resultado == null) {
+            consola.mostrarAviso(
+                    "La partida terminó sin resultado definido.");
+            finPartida.countDown();
+            return;
+        }
+
+        if (resultado == ResultadoPartida.EMPATE) {
+            broadcast(Protocolo.DRAW);
+        } else if (resultado == ResultadoPartida.VICTORIA_BLANCO) {
+            broadcast(Protocolo.win(Lado.BLANCO));
+        } else if (resultado == ResultadoPartida.VICTORIA_NEGRO) {
+            broadcast(Protocolo.win(Lado.NEGRO));
+        }
+
+        String estado = gestor.estadoTablero();
+        int piezasBlancas = 0;
+        int piezasNegras = 0;
+
+        if (estado != null && estado.length() == 64) {
+            for (char ficha : estado.toCharArray()) {
+                if (ficha == 'B' || ficha == 'R') {
+                    piezasBlancas++;
+                } else if (ficha == 'N' || ficha == 'r') {
+                    piezasNegras++;
+                }
+            }
+        }
+
+        HiloCliente blanco = null;
+        HiloCliente negro = null;
+
+        for (HiloCliente cliente : clientes) {
+            if (cliente.getLado() == Lado.BLANCO) {
+                blanco = cliente;
+            } else if (cliente.getLado() == Lado.NEGRO) {
+                negro = cliente;
+            }
+        }
+
+        int puntosBlanco =
+                resultado == ResultadoPartida.VICTORIA_BLANCO ? 5 : 0;
+
+        int puntosNegro =
+                resultado == ResultadoPartida.VICTORIA_NEGRO ? 5 : 0;
+
+        if (blanco != null && negro != null) {
+
+            String resultadoBlanco =
+                    resultado == ResultadoPartida.EMPATE
+                            ? "EMPATE"
+                            : puntosBlanco == 5 ? "VICTORIA" : "DERROTA";
+
+            String resultadoNegro =
+                    resultado == ResultadoPartida.EMPATE
+                            ? "EMPATE"
+                            : puntosNegro == 5 ? "VICTORIA" : "DERROTA";
+
+            blanco.enviar(Protocolo.result(
+                    resultadoBlanco, puntosBlanco));
+
+            negro.enviar(Protocolo.result(
+                    resultadoNegro, puntosNegro));
+
+            if (baseDeDatosDisponible
+                    && blanco.getIdJugador() > 0
+                    && negro.getIdJugador() > 0) {
+
+                try {
+                    org.example.datos.RegistroPartida registro =
+                            new org.example.datos.RegistroPartida(
+                                    inicioPartida,
+                                    LocalDateTime.now(),
+                                    resultado.name(),
+                                    blanco.getIdJugador(),
+                                    negro.getIdJugador(),
+                                    puntosBlanco,
+                                    puntosNegro,
+                                    resultadoBlanco,
+                                    resultadoNegro,
+                                    piezasBlancas,
+                                    piezasNegras
+                            );
+
+                    int idPartida =
+                            new PartidaDAO().registrarPartida(registro);
+
+                    consola.registrarEnBitacora(
+                            "Partida registrada en MySQL. ID: "
+                                    + idPartida);
+
+                    mostrarRanking();
+
+                } catch (SQLException e) {
+                    consola.mostrarError(
+                            "No se pudo guardar la partida: "
+                                    + e.getMessage());
+                }
+            }
+        }
+
+        consola.registrarEnBitacora(
+                "Partida finalizada: " + resultado);
+
+        finPartida.countDown();
+    }
+
+    // Consulta los puntos acumulados desde MySQL.
+    private void mostrarRanking() {
+        try {
+            consola.mostrarMensaje("=== RANKING ===");
+
+            for (org.example.datos.FilaRanking fila
+                    : new JugadorDAO().ranking()) {
+
+                consola.mostrarMensaje(
+                        fila.usuario() + " | "
+                                + fila.puntosTotales() + " puntos | "
+                                + fila.victorias() + " victorias");
+            }
+
+        } catch (SQLException e) {
+            consola.mostrarError(
+                    "Error consultando ranking: "
+                            + e.getMessage());
+        }
+    }
+
+    // Libera recursos del servidor.
+    public void cerrar() {
+
+        if (cerrado) {
+            return;
+        }
+
+        cerrado = true;
+        cancelarTemporizador();
+
+        for (HiloCliente cliente : clientes) {
+            cliente.cerrarForzado();
+        }
+
+        if (serverSocket != null && !serverSocket.isClosed()) {
+            try {
+                serverSocket.close();
+            } catch (IOException e) {
+                consola.mostrarAviso(
+                        "Error cerrando socket: " + e.getMessage());
+            }
+        }
+
+        executor.shutdown();
+        programador.shutdown();
+
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+
+            if (!programador.awaitTermination(5, TimeUnit.SECONDS)) {
+                programador.shutdownNow();
+            }
+
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            programador.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        ConexionMySQL.cerrarPool();
+
+        consola.mostrarMensaje("Servidor finalizado.");
+    }
+
 }

@@ -1,9 +1,8 @@
+
 package org.example.red;
 
-import org.example.logica.CanalJugador;
-import org.example.logica.GestorPartida;
 import org.example.logica.Lado;
-import org.example.logica.LoginRechazadoException;
+import org.example.logica.Tablero;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -13,123 +12,289 @@ import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.function.BiConsumer;
 
-public class HiloCliente implements Runnable, CanalJugador {
+/**
+ * Atiende a un jugador conectado mediante
+ * su propio hilo de servidor.
+ */
+public class HiloCliente implements Runnable {
+
     private static final int TIMEOUT_LECTURA_MS = 30_000;
+
     private final Socket socket;
-    private final GestorPartida gestor;
-    private volatile BufferedWriter salida;
+    private final ServidorDamas servidor;
+
+    private BufferedWriter salida;
     private volatile boolean activo = true;
     private volatile Lado lado;
+    private volatile String usuario;
 
-    public HiloCliente(Socket socket, GestorPartida gestor) {
-        this.socket = socket;
-        this.gestor = gestor;
+    private volatile int idJugador = -1;
+    private volatile int puntosAcumulados;
+
+    private volatile BiConsumer<String, String> procesadorMovimiento;
+    private volatile Runnable alDesconectar;
+
+    public HiloCliente(Socket socket, ServidorDamas servidor) {
+        this.socket = Objects.requireNonNull(socket);
+        this.servidor = Objects.requireNonNull(servidor);
+    }
+
+    public String getUsuario() {
+        return usuario;
+    }
+
+    public Lado getLado() {
+        return lado;
+    }
+
+    public int getIdJugador() {
+        return idJugador;
+    }
+
+    public int getPuntosAcumulados() {
+        return puntosAcumulados;
+    }
+
+    public void setIdJugador(int idJugador) {
+        this.idJugador = idJugador;
+    }
+
+    public void setPuntosAcumulados(int puntos) {
+        this.puntosAcumulados = puntos;
+    }
+
+    /*
+     * El servidor conectará aquí el procesamiento
+     * de movimientos cuando se integre la partida.
+     */
+    public void setProcesadorMovimiento(
+            BiConsumer<String, String> procesador) {
+        this.procesadorMovimiento =
+                Objects.requireNonNull(procesador);
+    }
+
+    public void setAlDesconectar(Runnable accion) {
+        this.alDesconectar =
+                Objects.requireNonNull(accion);
     }
 
     @Override
     public void run() {
-        String origen = String.valueOf(socket.getRemoteSocketAddress());
-        gestor.registrarEvento("Conexión entrante desde " + origen);
-        // try-with-resources: el socket y los flujos se cierran siempre, incluso ante una excepción
-        try (socket;
-             BufferedReader entrada = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-             BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
-            salida = out;
-            socket.setSoTimeout(TIMEOUT_LECTURA_MS);
+
+        try (Socket conexion = socket;
+             BufferedReader entrada =
+                     new BufferedReader(
+                             new InputStreamReader(
+                                     conexion.getInputStream(),
+                                     StandardCharsets.UTF_8));
+             BufferedWriter escritor =
+                     new BufferedWriter(
+                             new OutputStreamWriter(
+                                     conexion.getOutputStream(),
+                                     StandardCharsets.UTF_8))) {
+
+            synchronized (this) {
+                salida = escritor;
+            }
+
+            conexion.setSoTimeout(TIMEOUT_LECTURA_MS);
+
             while (activo) {
                 String linea;
+
                 try {
                     linea = entrada.readLine();
-                } catch (SocketTimeoutException esperando) {
-                    if (gestor.estaTerminada()) break;
-                    continue; // el jugador está pensando: se sigue esperando
+                } catch (SocketTimeoutException e) {
+                    // El temporizador del turno
+                    // lo controla el servidor.
+                    continue;
                 }
-                if (linea == null) break; // el cliente cerró la conexión
-                if (!procesar(linea)) break;
+
+                if (linea == null || !procesar(linea)) {
+                    break;
+                }
             }
+
         } catch (IOException e) {
             if (activo) {
-                gestor.registrarEvento("Conexión con " + origen + " interrumpida: " + e.getMessage());
+                System.err.println(
+                        "[SERVIDOR] Conexion interrumpida: "
+                                + e.getMessage());
             }
+
         } finally {
             activo = false;
-            if (lado != null) {
-                gestor.jugadorDesconectado(lado);
+
+            Runnable accion = alDesconectar;
+
+            if (accion != null && lado != null) {
+                accion.run();
             }
         }
     }
 
     private boolean procesar(String linea) {
-        Protocolo.Mensaje mensaje = Protocolo.parsear(linea);
+
+        Protocolo.Mensaje mensaje =
+                Protocolo.parsear(linea);
+
         switch (mensaje.comando()) {
-            case Protocolo.LOGIN -> {
-                if (lado != null) {
-                    error("ya inició sesión");
-                    return true;
-                }
-                String[] campos = Protocolo.campos(mensaje.argumentos());
-                if (campos.length != 2) {
-                    error("formato esperado LOGIN:usuario|bando");
-                    return true;
-                }
-                try {
-                    lado = gestor.registrarJugador(campos[0], campos[1], this);
-                } catch (LoginRechazadoException e) {
-                    error(e.getMessage());
-                }
-            }
-            case Protocolo.MOV -> {
-                if (lado == null) {
-                    error("debe iniciar sesión con LOGIN antes de jugar");
-                    return true;
-                }
-                String[] casillas = mensaje.argumentos().split(",", -1);
-                if (casillas.length != 2) {
-                    error("formato esperado MOV:origen,destino");
-                    return true;
-                }
-                gestor.procesarMovimiento(lado, casillas[0], casillas[1]);
-            }
+
+            case Protocolo.LOGIN ->
+                    procesarLogin(mensaje.argumentos());
+
+            case Protocolo.MOV ->
+                    procesarMovimiento(mensaje.argumentos());
+
             case Protocolo.BYE -> {
                 return false;
             }
-            default -> error("mensaje desconocido: " + mensaje.comando());
+
+            default -> enviar(
+                    Protocolo.err(
+                            "Comando no reconocido: "
+                                    + mensaje.comando()));
         }
+
         return true;
     }
-    private synchronized void enviarLinea(String linea) {
-        BufferedWriter w = salida;
-        if (!activo || w == null) {
+
+    private void procesarLogin(String argumentos) {
+
+        if (lado != null) {
+            enviar(Protocolo.err("Ya inicio sesion"));
             return;
         }
+
+        String[] campos = Protocolo.campos(argumentos);
+
+        if (campos.length != 2) {
+            enviar(Protocolo.err(
+                    "Formato: LOGIN:usuario|bando"));
+            return;
+        }
+
+        String nombre = campos[0].trim();
+
+        if (nombre.isEmpty() || nombre.length() > 50) {
+            enviar(Protocolo.err(
+                    "El usuario debe tener entre 1 y 50 caracteres"));
+            return;
+        }
+
+        Lado preferido;
+
         try {
-            w.write(linea);
-            w.write('\n');
-            w.flush();
+            preferido = Lado.valueOf(
+                    campos[1].trim().toUpperCase(Locale.ROOT));
+
+        } catch (IllegalArgumentException e) {
+            enviar(Protocolo.err(
+                    "Bando invalido; use BLANCO o NEGRO"));
+            return;
+        }
+
+        Lado asignado = servidor.asignarBando(preferido);
+
+        if (asignado == null) {
+            enviar(Protocolo.err(
+                    "La partida ya tiene dos jugadores"));
+            return;
+        }
+
+        usuario = nombre;
+        lado = asignado;
+
+        // Registrar jugador en la base de datos.
+        servidor.registrarJugador(this);
+
+        // Comunicar al cliente su bando asignado.
+        enviar(Protocolo.welcome(asignado));
+
+        // Avisar al servidor que el cliente ingreso.
+        servidor.registrarCliente(this);
+    }
+
+    private void procesarMovimiento(String argumentos) {
+
+        if (lado == null) {
+            enviar(Protocolo.err(
+                    "Debe iniciar sesion antes de jugar"));
+            return;
+        }
+
+        String[] casillas = argumentos.split(",", -1);
+
+        if (casillas.length != 2) {
+            enviar(Protocolo.err(
+                    "Formato: MOV:origen,destino"));
+            return;
+        }
+
+        String origen =
+                casillas[0].trim().toLowerCase(Locale.ROOT);
+
+        String destino =
+                casillas[1].trim().toLowerCase(Locale.ROOT);
+
+        if (!Tablero.coordenadaValida(origen)
+                || !Tablero.coordenadaValida(destino)) {
+
+            enviar(Protocolo.err(
+                    "Coordenadas invalidas"));
+            return;
+        }
+
+        /*
+         * El servidor es la autoridad del tablero.
+         * Este hilo solo recibe y entrega la jugada.
+         */
+        BiConsumer<String, String> procesador =
+                procesadorMovimiento;
+
+        if (procesador == null) {
+            enviar(Protocolo.err(
+                    "La partida aun no admite movimientos"));
+            return;
+        }
+
+        procesador.accept(origen, destino);
+    }
+
+    /*
+     * Los mensajes se envian de manera sincronizada
+     * para evitar que varios hilos mezclen la salida.
+     */
+    public synchronized void enviar(String mensaje) {
+
+        if (!activo || salida == null) {
+            return;
+        }
+
+        try {
+            salida.write(mensaje);
+            salida.newLine();
+            salida.flush();
+
         } catch (IOException e) {
             activo = false;
+            cerrarForzado();
         }
     }
 
-    @Override public void bienvenida(Lado l) { enviarLinea(Protocolo.welcome(l)); }
-    @Override public void estado(String tablero64) { enviarLinea(Protocolo.state(tablero64)); }
-    @Override public void turno(Lado l) { enviarLinea(Protocolo.turn(l)); }
-    @Override public void ok() { enviarLinea(Protocolo.OK); }
-    @Override public void error(String motivo) { enviarLinea(Protocolo.err(motivo)); }
-    @Override public void captura() { enviarLinea(Protocolo.CAPTURE); }
-    @Override public void coronacion() { enviarLinea(Protocolo.KING); }
-    @Override public void tiempoAgotado() { enviarLinea(Protocolo.TIMEOUT); }
-    @Override public void victoria(Lado ganador) { enviarLinea(Protocolo.win(ganador)); }
-    @Override public void empate() { enviarLinea(Protocolo.DRAW); }
-    @Override public void resultado(String resultado, int puntos) { enviarLinea(Protocolo.result(resultado, puntos)); }
+    public void cerrarForzado() {
 
-    void cerrarForzado() {
         activo = false;
+
         try {
             socket.close();
-        } catch (IOException ignorada) {
-            // ya estaba cerrado
+
+        } catch (IOException ignored) {
+            // El socket ya estaba cerrado.
         }
     }
 }

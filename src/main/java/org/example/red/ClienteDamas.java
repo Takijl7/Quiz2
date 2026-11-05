@@ -1,12 +1,11 @@
+
 package org.example.red;
 
 import org.example.logica.Ficha;
 import org.example.logica.Lado;
 import org.example.logica.Tablero;
 import org.example.presentacion.ConsolaCliente;
-import org.example.presentacion.swing.TableroSwing;
 
-import javax.swing.SwingUtilities;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -18,398 +17,516 @@ import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Scanner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 public class ClienteDamas {
+
     public static final String HOST_POR_DEFECTO = "localhost";
     public static final int PUERTO_POR_DEFECTO = 5050;
+
     private static final int TIMEOUT_LECTURA = 1000;
+
     private final ConsolaCliente consola = new ConsolaCliente();
+
     private final List<Ficha> fichas = new ArrayList<>();
     private final List<HiloFicha> hilosFicha = new ArrayList<>();
+
     private final Object candadoEnvio = new Object();
     private final Object candadoTurno = new Object();
-    private final Object candadoMovimiento = new Object();
-    private static final long ESPERA_TURNO_MILLIS = 60_000L;
-    private final CountDownLatch sesionIniciada = new CountDownLatch(1);
+
+    private final CountDownLatch sesionIniciada =
+            new CountDownLatch(1);
+
     private final String host;
     private final int puerto;
-    private final boolean usarSwing;
+
     private Socket socket;
     private BufferedReader lector;
     private PrintWriter escritor;
-    private volatile String usuario = "";
-    private volatile String bandoPreferido = "";
+
+    private String usuario = "";
+    private String bandoPreferido = "";
+
     private volatile String bando = "";
     private volatile String estadoTablero = "";
     private volatile String turnoActual = "";
-    private volatile String mensajeSistema = "";
-    private volatile boolean terminado;
-    private volatile TableroSwing ventanaSwing;
 
-    public ClienteDamas(String host, int puerto, boolean usarSwing) {
+    private volatile boolean terminado = false;
+
+    public ClienteDamas(String host, int puerto) {
         this.host = host;
         this.puerto = puerto;
-        this.usarSwing = usarSwing;
     }
 
     public static void main(String[] args) {
-        // Salida en UTF-8 explícito, como exige el punto 6.7 del enunciado.
-        System.setOut(new java.io.PrintStream(System.out, true, StandardCharsets.UTF_8));
-        System.setErr(new java.io.PrintStream(System.err, true, StandardCharsets.UTF_8));
 
         String host = HOST_POR_DEFECTO;
         int puerto = PUERTO_POR_DEFECTO;
-        boolean swing = false;
+
         if (args.length > 0) {
             host = args[0];
         }
+
         if (args.length > 1) {
             try {
                 puerto = Integer.parseInt(args[1]);
-            } catch (NumberFormatException e) {
-                System.err.println("[Cliente] Puerto inválido: '" + args[1]
-                        + "'. Se usará el puerto por defecto " + PUERTO_POR_DEFECTO + ".");
-            }
-        }
-        for (String argumento : args) {
-            if ("swing".equalsIgnoreCase(argumento) || "--swing".equalsIgnoreCase(argumento)) {
-                swing = true;
-            }
-        }
-        conectar(host, puerto, swing);
-    }
 
-    public static void conectar(String host, int puerto, boolean usarSwing) {
-        new ClienteDamas(host, puerto, usarSwing).ejecutar();
+                if (puerto < 1 || puerto > 65535) {
+                    throw new NumberFormatException();
+                }
+
+            } catch (NumberFormatException e) {
+                System.err.println(
+                        "Puerto invalido: " + args[1]);
+                return;
+            }
+        }
+
+        new ClienteDamas(host, puerto).ejecutar();
     }
 
     public void ejecutar() {
+
         try {
             pedirIdentidad();
+
+            if (usuario.isBlank() || bandoPreferido.isBlank()) {
+                return;
+            }
+
             abrirSocket();
+
             enviar(Protocolo.login(usuario, bandoPreferido));
 
-            Thread hiloLector = new Thread(this::leerServidor, "LectorCliente");
+            Thread hiloLector = new Thread(
+                    this::leerServidor,
+                    "LectorCliente"
+            );
+
             hiloLector.setDaemon(true);
             hiloLector.start();
 
             if (!sesionIniciada.await(15, TimeUnit.SECONDS)) {
-                throw new IOException("El servidor no respondió al inicio de sesión.");
+                throw new IOException(
+                        "El servidor no respondio al LOGIN.");
             }
+
             if (bando.isEmpty()) {
-                throw new IOException("El servidor no asignó un bando.");
+                throw new IOException(
+                        "El servidor no asigno un bando.");
             }
 
             crearFichasYHilos();
-            if (usarSwing) {
-                abrirSwing();
-            }
-            consola.mostrarEncabezado(usuario, bando, host, puerto);
+
+            consola.mostrarEncabezado(
+                    usuario, bando, host, puerto);
+
             leerConsola();
+
         } catch (IOException e) {
-            consola.mostrarError("Error del cliente: " + e.getMessage());
+            consola.mostrarError(e.getMessage());
+
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+
         } finally {
             cerrar();
         }
     }
 
     private void pedirIdentidad() {
-        if (usarSwing) {
-            usuario = TableroSwing.pedirUsuario();
-            bandoPreferido = TableroSwing.pedirBando();
-        } else {
-            usuario = consola.pedirUsuario();
-            bandoPreferido = consola.pedirBandoPreferido();
-        }
+        usuario = consola.pedirUsuario();
+        bandoPreferido = consola.pedirBandoPreferido();
     }
 
     private void abrirSocket() throws IOException {
+
         socket = new Socket();
-        socket.connect(new InetSocketAddress(host, puerto), 5000);
+
+        socket.connect(
+                new InetSocketAddress(host, puerto),
+                5000
+        );
+
         socket.setSoTimeout(TIMEOUT_LECTURA);
-        lector = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-        escritor = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+
+        lector = new BufferedReader(
+                new InputStreamReader(
+                        socket.getInputStream(),
+                        StandardCharsets.UTF_8
+                )
+        );
+
+        escritor = new PrintWriter(
+                new OutputStreamWriter(
+                        socket.getOutputStream(),
+                        StandardCharsets.UTF_8
+                ),
+                true
+        );
     }
 
+    // Crea exactamente doce hilos, uno por ficha.
     private void crearFichasYHilos() {
-        Lado lado = Lado.valueOf(bando.toUpperCase());
+
+        Lado lado = Lado.valueOf(bando.toUpperCase(
+                Locale.ROOT));
+
         for (Ficha ficha : Tablero.fichasIniciales(lado)) {
+
             fichas.add(ficha);
-            HiloFicha hilo = new HiloFicha(ficha, this::enviarMovimiento);
+
+            HiloFicha hilo = new HiloFicha(
+                    ficha,
+                    this::enviarMovimiento
+            );
+
             hilosFicha.add(hilo);
             hilo.iniciar();
         }
-        consola.mostrarMensaje("Se crearon " + hilosFicha.size() + " hilos de ficha (uno por cada ficha).");
+
+        consola.mostrarMensaje(
+                "Se crearon " + hilosFicha.size()
+                        + " hilos de ficha.");
     }
 
-    private void sincronizarFichas(String estado) {
-        if (bando.isEmpty() || estado.length() < Tablero.TAMANIO * Tablero.TAMANIO) {
-            return;
-        }
-        Lado propio = Lado.valueOf(bando.toUpperCase());
-
-        List<String> enTablero = new ArrayList<>();
-        for (int fila = 0; fila < Tablero.TAMANIO; fila++) {
-            for (int columna = 0; columna < Tablero.TAMANIO; columna++) {
-                if (Tablero.ladoDe(estado.charAt(fila * Tablero.TAMANIO + columna)) == propio) {
-                    enTablero.add(Tablero.coordenada(columna, fila));
-                }
-            }
-        }
-
-        // Las fichas que siguen en su casilla no se mueven.
-        List<String> libres = new ArrayList<>(enTablero);
-        List<HiloFicha> desplazadas = new ArrayList<>();
-        for (HiloFicha hilo : hilosFicha) {
-            if (libres.remove(hilo.getFicha().getCoordenada())) {
-                continue;
-            }
-            desplazadas.add(hilo);
-        }
-
-        // Las fichas que sobran fueron capturadas por el rival.
-        while (desplazadas.size() > libres.size()) {
-            HiloFicha capturada = desplazadas.remove(0);
-            hilosFicha.remove(capturada);
-            capturada.interrumpir();
-        }
-
-        // Las que se movieron reciben la casilla nueva que ocupa su ficha.
-        for (int i = 0; i < desplazadas.size(); i++) {
-            String coordenada = libres.get(i);
-            desplazadas.get(i).getFicha().setPosicion(
-                    Tablero.columnaDe(coordenada), Tablero.filaDe(coordenada));
-        }
-    }
-
-    private void abrirSwing() {
-        SwingUtilities.invokeLater(() -> {
-            ventanaSwing = new TableroSwing("Juego de Damas - " + usuario, bando, this::solicitarMovimiento);
-            ventanaSwing.setAlCerrar(() -> terminado = true);
-            ventanaSwing.setVisible(true);
-            actualizarVista();
-        });
-    }
-
+    // Recibe mensajes del servidor en un hilo separado.
     private void leerServidor() {
+
         try {
             while (!terminado) {
+
                 String linea;
+
                 try {
                     linea = lector.readLine();
+
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
+
                 if (linea == null) {
                     break;
                 }
+
                 manejarMensaje(linea);
             }
+
         } catch (IOException e) {
+
             if (!terminado) {
-                consola.mostrarError("Se perdió la conexión con el servidor: " + e.getMessage());
+                consola.mostrarError(
+                        "Conexion perdida: " + e.getMessage());
             }
+
         } finally {
             terminado = true;
             sesionIniciada.countDown();
+
+            synchronized (candadoTurno) {
+                candadoTurno.notifyAll();
+            }
         }
     }
 
     private void manejarMensaje(String mensaje) {
-        String tipo = Protocolo.tipoDe(mensaje);
-        String[] campos = Protocolo.camposDe(mensaje);
-        String valor = campos.length > 0 ? campos[0].trim() : "";
+
+        Protocolo.Mensaje recibido =
+                Protocolo.parsear(mensaje);
+
+        String tipo = recibido.comando();
+        String valor = recibido.argumentos();
 
         switch (tipo) {
+
             case Protocolo.WELCOME -> {
-                bando = valor;
-                consola.mostrarMensaje("Bando asignado: " + bando);
+                bando = valor.trim();
+
+                consola.mostrarMensaje(
+                        "Bando asignado: " + bando);
+
                 sesionIniciada.countDown();
             }
+
             case Protocolo.STATE -> {
+
+                if (valor.length() != 64) {
+                    consola.mostrarAviso(
+                            "Estado del tablero invalido.");
+                    return;
+                }
+
                 estadoTablero = valor;
+
                 sincronizarFichas(valor);
                 consola.mostrarTablero(valor);
             }
+
             case Protocolo.TURN -> {
+
                 synchronized (candadoTurno) {
-                    turnoActual = valor;
+                    turnoActual = valor.trim();
                     candadoTurno.notifyAll();
                 }
-                mensajeSistema = "Turno de " + turnoActual;
-                consola.mostrarTurno(turnoActual, bando);
+
+                consola.mostrarTurno(
+                        turnoActual, bando);
             }
-            case Protocolo.OK -> mensajeSistema = "Jugada aceptada";
-            case Protocolo.CAPTURE -> {
-                mensajeSistema = "Captura realizada";
-                consola.mostrarMensaje("¡Captura!");
-            }
-            case Protocolo.KING -> {
-                mensajeSistema = "Su ficha fue coronada a dama";
-                consola.mostrarMensaje("¡Coronada a dama!");
-            }
-            case Protocolo.TIMEOUT -> {
-                mensajeSistema = "Se agotó su tiempo de turno";
-                consola.mostrarAviso("Se agotó el tiempo de turno; el turno pasó al rival.");
-            }
-            case Protocolo.ERR -> {
-                mensajeSistema = "Error: " + valor;
-                consola.mostrarError(valor);
-            }
-            case Protocolo.WIN -> {
-                mensajeSistema = "Ganó el bando " + valor;
-                consola.mostrarMensaje(mensajeSistema);
-            }
-            case Protocolo.DRAW -> {
-                mensajeSistema = "La partida terminó en empate";
-                consola.mostrarMensaje(mensajeSistema);
-            }
+
+            case Protocolo.OK ->
+                    consola.mostrarMensaje(
+                            "Jugada aceptada.");
+
+            case Protocolo.ERR ->
+                    consola.mostrarError(valor);
+
+            case Protocolo.CAPTURE ->
+                    consola.mostrarMensaje(
+                            "Captura realizada.");
+
+            case Protocolo.KING ->
+                    consola.mostrarMensaje(
+                            "Ficha coronada a dama.");
+
+            case Protocolo.TIMEOUT ->
+                    consola.mostrarAviso(
+                            "Tiempo agotado. Turno cedido.");
+
+            case Protocolo.WIN ->
+                    consola.mostrarMensaje(
+                            "Gano el bando " + valor);
+
+            case Protocolo.DRAW ->
+                    consola.mostrarMensaje(
+                            "La partida termino en empate.");
+
             case Protocolo.RESULT -> {
-                String resultadoIndividual = campos.length > 0 ? campos[0] : "";
-                int puntos = campos.length > 1 ? Integer.parseInt(campos[1]) : 0;
-                mensajeSistema = resultadoIndividual + " - " + puntos + " punto(s)";
-                consola.mostrarResultado(resultadoIndividual, puntos);
-                terminado = true;
-            }
-            default -> consola.mostrarAviso("Mensaje desconocido del servidor: " + mensaje);
-        }
-        actualizarVista();
-    }
 
-    private void actualizarVista() {
-        TableroSwing ventana = ventanaSwing;
-        if (ventana == null) {
-            return;
-        }
-        if (!estadoTablero.isEmpty()) {
-            ventana.actualizarTablero(estadoTablero);
-        }
-        ventana.setTurno(turnoActual);
-        ventana.setJugador(usuario, bando);
-        ventana.setMensaje(mensajeSistema);
-        if (terminado) {
-            ventana.finalizar(mensajeSistema);
-        }
-    }
+                String[] campos = Protocolo.campos(valor);
 
-    private void leerConsola() {
-        Scanner scanner = consola.getScanner();
-        while (!terminado) {
-            if (!scanner.hasNextLine()) {
-                break;
-            }
-            String linea = scanner.nextLine().trim();
-            if (linea.isEmpty()) {
-                continue;
-            }
-            if ("salir".equalsIgnoreCase(linea) || "q".equalsIgnoreCase(linea)) {
-                break;
-            }
-            String[] jugada = interpretarJugada(linea);
-            if (jugada != null) {
-                solicitarMovimiento(jugada[0], jugada[1]);
-            }
-        }
-    }
+                String resultado =
+                        campos.length > 0 ? campos[0] : "";
 
-    private String[] interpretarJugada(String linea) {
-        String[] partes = linea.split("[\\s,;\\-]+");
-        if (partes.length == 0 || !Tablero.coordenadaValida(partes[0])) {
-            consola.mostrarAviso("Use el formato c3 d4 (por ejemplo: b6 c5).");
-            return null;
-        }
-        if (partes.length >= 2) {
-            if (!Tablero.coordenadaValida(partes[1])) {
-                consola.mostrarAviso("Coordenada de destino inválida: " + partes[1]);
-                return null;
-            }
-            return new String[]{partes[0], partes[1]};
-        }
-        String destino = consola.pedirLinea("Destino (por ejemplo d4): ");
-        if (destino == null || destino.isBlank() || !Tablero.coordenadaValida(destino.trim())) {
-            return null;
-        }
-        return new String[]{partes[0], destino.trim()};
-    }
+                int puntos = 0;
 
-    public void solicitarMovimiento(String origen, String destino) {
-        for (HiloFicha hilo : hilosFicha) {
-            if (hilo.getFicha().getCoordenada().equalsIgnoreCase(origen.trim())) {
-                hilo.solicitarMovimiento(destino.trim());
-                return;
-            }
-        }
-        consola.mostrarError("No tiene ninguna ficha en " + origen + ".");
-    }
-
-    private void enviarMovimiento(String origen, String destino) {
-        if (terminado) {
-            return;
-        }
-        // Los 12 hilos de ficha se serializan: solo puede haber una jugada en
-        // vuelo, de lo contrario el servidor recibiría jugadas fuera de orden.
-        synchronized (candadoMovimiento) {
-            if (terminado) {
-                return;
-            }
-            // Si la jugada se escribe antes de que llegue el turno, el hilo de
-            // la ficha espera a que le toque en lugar de perder la jugada.
-            synchronized (candadoTurno) {
-                long limite = System.currentTimeMillis() + ESPERA_TURNO_MILLIS;
-                while (!terminado && !turnoActual.equalsIgnoreCase(bando)
-                        && System.currentTimeMillis() < limite) {
+                if (campos.length > 1) {
                     try {
-                        candadoTurno.wait(200);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
+                        puntos = Integer.parseInt(campos[1]);
+                    } catch (NumberFormatException e) {
+                        consola.mostrarAviso(
+                                "Puntaje recibido invalido.");
                     }
                 }
+
+                consola.mostrarResultado(resultado, puntos);
+                terminado = true;
+
+                synchronized (candadoTurno) {
+                    candadoTurno.notifyAll();
+                }
             }
+
+            default ->
+                    consola.mostrarAviso(
+                            "Mensaje desconocido: " + mensaje);
+        }
+    }
+
+    // Actualiza posiciones a partir del estado autorizado.
+    private void sincronizarFichas(String estado) {
+
+        if (bando.isBlank() || hilosFicha.isEmpty()) {
+            return;
+        }
+
+        Lado propio = Lado.valueOf(bando);
+
+        List<String> posiciones = new ArrayList<>();
+
+        for (int fila = 0; fila < Tablero.TAMANIO; fila++) {
+            for (int columna = 0;
+                 columna < Tablero.TAMANIO;
+                 columna++) {
+
+                char simbolo = estado.charAt(
+                        fila * Tablero.TAMANIO + columna);
+
+                if (Tablero.ladoDe(simbolo) == propio) {
+                    posiciones.add(
+                            Tablero.coordenada(columna, fila));
+                }
+            }
+        }
+
+        synchronized (hilosFicha) {
+
+            List<String> libres =
+                    new ArrayList<>(posiciones);
+
+            List<HiloFicha> desplazadas =
+                    new ArrayList<>();
+
+            for (HiloFicha hilo : hilosFicha) {
+                if (!libres.remove(
+                        hilo.getFicha().getCoordenada())) {
+                    desplazadas.add(hilo);
+                }
+            }
+
+            while (desplazadas.size() > libres.size()) {
+
+                HiloFicha capturada =
+                        desplazadas.remove(0);
+
+                hilosFicha.remove(capturada);
+                capturada.interrumpir();
+            }
+
+            for (int i = 0;
+                 i < desplazadas.size() && i < libres.size();
+                 i++) {
+
+                String casilla = libres.get(i);
+
+                desplazadas.get(i).getFicha().setPosicion(
+                        Tablero.columnaDe(casilla),
+                        Tablero.filaDe(casilla)
+                );
+            }
+        }
+    }
+
+    // Lee los movimientos ingresados por teclado.
+    private void leerConsola() {
+
+        Scanner scanner = consola.getScanner();
+
+        while (!terminado && scanner.hasNextLine()) {
+
+            String linea = scanner.nextLine().trim();
+
+            if (linea.equalsIgnoreCase("salir")
+                    || linea.equalsIgnoreCase("q")) {
+                break;
+            }
+
+            if (linea.isBlank()) {
+                continue;
+            }
+
+            String[] partes =
+                    linea.split("[\\s,;\\-]+");
+
+            if (partes.length != 2) {
+
+                consola.mostrarAviso(
+                        "Formato: origen destino. Ejemplo: b6 c5");
+                continue;
+            }
+
+            solicitarMovimiento(
+                    partes[0], partes[1]);
+        }
+    }
+
+    public void solicitarMovimiento(
+            String origen, String destino) {
+
+        origen = origen.trim().toLowerCase(Locale.ROOT);
+        destino = destino.trim().toLowerCase(Locale.ROOT);
+
+        if (!Tablero.coordenadaValida(origen)
+                || !Tablero.coordenadaValida(destino)) {
+
+            consola.mostrarAviso(
+                    "Coordenadas invalidas.");
+            return;
+        }
+
+        synchronized (hilosFicha) {
+
+            for (HiloFicha hilo : hilosFicha) {
+
+                if (hilo.getFicha().getCoordenada()
+                        .equalsIgnoreCase(origen)) {
+
+                    hilo.solicitarMovimiento(destino);
+                    return;
+                }
+            }
+        }
+
+        consola.mostrarError(
+                "No tiene una ficha en " + origen);
+    }
+
+    // El movimiento sale desde el hilo de la ficha.
+    private void enviarMovimiento(
+            String origen, String destino) {
+
+        synchronized (candadoTurno) {
+
             if (terminado) {
                 return;
             }
+
             if (!turnoActual.equalsIgnoreCase(bando)) {
-                consola.mostrarAviso("No es su turno: ahora juega " + turnoActual + ".");
+
+                consola.mostrarAviso(
+                        "No es su turno.");
                 return;
             }
-            enviar(Protocolo.movimiento(origen, destino));
+
+            enviar(Protocolo.mov(origen, destino));
         }
     }
 
     private void enviar(String mensaje) {
+
         synchronized (candadoEnvio) {
-            if (escritor != null) {
-                escritor.print(mensaje);
-                escritor.print(Protocolo.FIN_LINEA);
+
+            if (escritor != null && !terminado) {
+                escritor.println(mensaje);
                 escritor.flush();
             }
         }
     }
 
     private void cerrar() {
-        try {
-            if (socket != null && !socket.isClosed()) {
-                enviar(Protocolo.BYE);
-                socket.close();
-            }
-        } catch (IOException e) {
-            // El socket ya estaba cerrado.
+
+        if (socket != null && !socket.isClosed()) {
+            enviar(Protocolo.BYE);
         }
-        TableroSwing ventana = ventanaSwing;
-        if (ventana != null) {
-            SwingUtilities.invokeLater(ventana::cerrar);
+
+        terminado = true;
+
+        synchronized (hilosFicha) {
+            for (HiloFicha hilo : hilosFicha) {
+                hilo.interrumpir();
+            }
+        }
+
+        synchronized (candadoTurno) {
+            candadoTurno.notifyAll();
+        }
+
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                consola.mostrarAviso(
+                        "Error al cerrar: " + e.getMessage());
+            }
         }
     }
 
     public String getBando() {
         return bando;
     }
+
     public String getUsuario() {
         return usuario;
     }
