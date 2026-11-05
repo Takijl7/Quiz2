@@ -8,50 +8,21 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Semaphore;
 
-
 public class ConexionMySQL {
     public static final String BASE_DATOS = "quiz2_damas";
-
     public static final String HOST = System.getProperty("quiz2.db.host", "localhost");
-
     public static final int PUERTO = Integer.getInteger("quiz2.db.puerto", 3306);
-
-    public static final String URL = "jdbc:mysql://" + HOST + ":" + PUERTO + "/" + BASE_DATOS
-            + "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
-
-    /** URL de conexión al servidor sin seleccionar base de datos. */
-    public static final String URL_SERVIDOR = "jdbc:mysql://" + HOST + ":" + PUERTO
-            + "/?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
-
-    /** Usuario de MySQL en el equipo donde corre el servidor. */
-    public static final String USUARIO = System.getProperty("quiz2.db.usuario", "Aaron");
-
-    /** Contraseña de MySQL: cada grupo debe ajustar la de su equipo. */
-    public static final String CLAVE = System.getProperty("quiz2.db.clave", "2424");
-
-    /** Cantidad máxima de conexiones abiertas del pool. */
-    public static final int TAMANO_POOL = 5;
-
-    /** Conexiones disponibles del pool. */
+    public static final String URL = "jdbc:mysql://" + HOST + ":" + PUERTO + "/" + BASE_DATOS + "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+    public static final String URL_SERVIDOR = "jdbc:mysql://" + HOST + ":" + PUERTO + "/?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+    public static final String USUARIO = System.getProperty("quiz2.db.usuario", "root");
+    public static final String CLAVE = System.getProperty("quiz2.db.clave", "");
+    public static final int TAMANO_POOL = 3;
     private static final BlockingQueue<Connection> POOL = new ArrayBlockingQueue<>(TAMANO_POOL);
-
-    /** Permisos del pool: limitan la cantidad de conexiones simultáneas. */
     private static final Semaphore PERMISOS = new Semaphore(TAMANO_POOL);
-
-    /** Indica si el pool ya fue inicializado. */
     private static volatile boolean poolInicializado;
 
-    /**
-     * Clase de utilidades: no se instancia.
-     */
-    private ConexionMySQL() {
-    }
+    private ConexionMySQL() {}
 
-    /**
-     * Carga el driver JDBC de MySQL.
-     *
-     * @throws SQLException si el driver no está en el classpath.
-     */
     public static void cargarDriver() throws SQLException {
         try {
             Class.forName("com.mysql.cj.jdbc.Driver");
@@ -61,23 +32,11 @@ public class ConexionMySQL {
         }
     }
 
-    /**
-     * Abre una conexión nueva con la base de datos.
-     *
-     * @return la conexión abierta.
-     * @throws SQLException si la conexión falla.
-     */
     public static Connection crearConexion() throws SQLException {
         cargarDriver();
         return DriverManager.getConnection(URL, USUARIO, CLAVE);
     }
 
-    /**
-     * Obtiene una conexión del pool, creando una si el pool está vacío.
-     *
-     * @return la conexión obtenida del pool.
-     * @throws SQLException si no se pudo crear la conexión.
-     */
     public static Connection obtenerConexion() throws SQLException {
         inicializarPool();
         try {
@@ -98,11 +57,6 @@ public class ConexionMySQL {
         return conexion;
     }
 
-    /**
-     * Devuelve una conexión al pool.
-     *
-     * @param conexion conexión a devolver, puede ser {@code null}.
-     */
     public static void devolverConexion(Connection conexion) {
         try {
             if (conexion != null && !conexion.isClosed()) {
@@ -116,9 +70,6 @@ public class ConexionMySQL {
         }
     }
 
-    /**
-     * Cierra todas las conexiones del pool.
-     */
     public static void cerrarPool() {
         Connection conexion;
         while ((conexion = POOL.poll()) != null) {
@@ -131,24 +82,12 @@ public class ConexionMySQL {
         poolInicializado = false;
     }
 
-    /**
-     * Prepara el pool de conexiones.
-     */
     private static synchronized void inicializarPool() {
         if (!poolInicializado) {
             poolInicializado = true;
         }
     }
 
-    /**
-     * Garantiza que la base de datos y las tablas del punto 6.3 existan (RF1).
-     *
-     * <p>El enunciado permite entregar el script {@code sql/quiz2_damas.sql},
-     * pero el servidor también puede asegurar el esquema al arrancar para que
-     * la solución funcione sin pasos manuales.</p>
-     *
-     * @throws SQLException si no se puede crear el esquema.
-     */
     public static void asegurarEsquema() throws SQLException {
         cargarDriver();
 
