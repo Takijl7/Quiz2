@@ -79,7 +79,6 @@ public class Tablero {
 
 
 
-
     private boolean puedeDesplazar(Ficha f) { //todo
         return false;
     }
@@ -92,23 +91,27 @@ public class Tablero {
         int x = f.getPosX();
         int y = f.getPosY();
 
-        //Comprovamos que el movimiento sea una casilla
-
-
-        //Movimiento a la misma casilla es invalido
-        if(x == nX && y == nY){return false;}
-
         //Validamos la posicion final y la direcion, si es reina cualquier direccion es compatible
         if(dentro(nX,nY) && tablero[nX][nY] == null){
-            if(f.getTipo() == TipoFicha.REINA){
 
-                //Comprobamos el movimiento en diagonalw
-                if(esDiagonal(f,nX,nY)){
+            //Comprobamos el movimiento en diagonal
+            if (esDiagonal(f, nX, nY)) {
 
+                if(f.getTipo() == TipoFicha.REINA) {
+                    return true;
+
+                    //Comprovamos que el movimiento sea una casilla
+                } else if (Math.abs(f.getPosX() - nX) == Math.abs(f.getPosY() - nY)
+                        && f.getPosX() == nX
+                        && Math.abs(f.getPosX() - nX) == 1) {
+                    if (f.getTipo() == TipoFicha.BLANCA) {
+                        return nY > y;
+                    }
+                    if (f.getTipo() == TipoFicha.NEGRA) {
+                        return nY < y;
+                    }
                 }
-            }else if(f.getTipo() == TipoFicha.BLANCA){
-
-            }else if(f.getTipo() == TipoFicha.NEGRA){}
+            }
         }
         return false;
     }
@@ -117,12 +120,29 @@ public class Tablero {
         int x = f.getPosX();
         int y = f.getPosY();
 
-        //Comprovamos que el movimiento sean dos casillas
+        //Validamos la posicion final y la direcion, si es reina cualquier direccion es compatible
+        if(dentro(nX,nY) && tablero[nX][nY] == null){
 
+            //Comprobamos el movimiento en diagonal
+            if (esDiagonal(f, nX, nY)) {
 
-        //Buscamos
+                if(f.getTipo() == TipoFicha.REINA) {
+                    //Comprobamos que haya una ficha en medio
 
-        return true;
+                //Comprovamos que el movimiento sean dos casilla
+                } else if (Math.abs(f.getPosX() - nX) == Math.abs(f.getPosY() - nY)
+                        && f.getPosX() == nX
+                        && Math.abs(f.getPosX() - nX) == 2) {
+                    if (f.getTipo() == TipoFicha.BLANCA) {
+                        return nY > y;
+                    }
+                    if (f.getTipo() == TipoFicha.NEGRA) {
+                        return nY < y;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     public boolean victoria(){//todo
