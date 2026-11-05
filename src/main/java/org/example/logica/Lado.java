@@ -1,4 +1,6 @@
 package org.example.logica;
 
-public class Lado {
+public enum Lado {
+    BLANCAS,
+    NEGRAS
 }

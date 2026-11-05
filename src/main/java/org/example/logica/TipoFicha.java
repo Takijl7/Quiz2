@@ -1,4 +1,7 @@
 package org.example.logica;
 
-public class TipoFicha {
+public enum TipoFicha {
+    BLANCA,
+    NEGRA,
+    REINA
 }

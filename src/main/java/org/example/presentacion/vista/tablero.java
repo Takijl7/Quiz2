@@ -1,72 +1,83 @@
 package org.example.presentacion.vista;
 
 import javax.swing.*;
+import java.awt.*;
 
-public class tablero {
-    private JPanel panel1;
-    private JButton b1;
-    private JButton b2;
-    private JButton b3;
-    private JButton b4;
-    private JButton b5;
-    private JButton b6;
-    private JButton b7;
-    private JButton b9;
-    private JButton b10;
-    private JButton b17;
-    private JButton b25;
-    private JButton b33;
-    private JButton b41;
-    private JButton b49;
-    private JButton b57;
-    private JButton b8;
-    private JButton button11;
-    private JButton button12;
-    private JButton button13;
-    private JButton button14;
-    private JButton button15;
-    private JButton b23;
-    private JButton b22;
-    private JButton b21;
-    private JButton b20;
-    private JButton b19;
-    private JButton b18;
-    private JButton b26;
-    private JButton b31;
-    private JButton b30;
-    private JButton b29;
-    private JButton b28;
-    private JButton b27;
-    private JButton b34;
-    private JButton b35;
-    private JButton b36;
-    private JButton b42;
-    private JButton b50;
-    private JButton b43;
-    private JButton b58;
-    private JButton b51;
-    private JButton b44;
-    private JButton b37;
-    private JButton b59;
-    private JButton b60;
-    private JButton b52;
-    private JButton b45;
-    private JButton b38;
-    private JButton b53;
-    private JButton b46;
-    private JButton b39;
-    private JButton b61;
-    private JButton b54;
-    private JButton b47;
-    private JButton b62;
-    private JButton b63;
-    private JButton button57;
-    private JButton button16;
-    private JButton b24;
-    private JButton b32;
-    private JButton b40;
-    private JButton b48;
-    private JButton b64;
-    private JScrollPane b55;
-    private JButton b56;
+public class tablero extends JFrame{
+    private JPanel panelRaiz;
+    private JPanel panelTablero;
+    private JButton Reiniciar;
+    private JLabel turno;
+    private JLabel DAMAS;
+
+    private final JButton[][] casillas = new JButton[8][8];
+    //Va en la logica v
+    //private final int[][] tablero = new int[8][8]; // 0 vacío, 1 negra, 2 blanca, 3 dama negra, 4 dama blanca
+    private int filaSel = -1, colSel = -1;
+    private boolean turnoBlancas = true;
+
+    public tablero() {
+        setContentPane(panelRaiz);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+        construirTablero();
+
+        pack();
+        setLocationRelativeTo(null);
+    }
+
+    private void construirTablero() {
+        panelTablero.removeAll();
+        panelTablero.setLayout(new GridLayout(8, 8));
+
+        for (int fila = 0; fila < 8; fila++) {
+            for (int col = 0; col < 8; col++) {
+
+                JButton b = new JButton();
+                b.setPreferredSize(new Dimension(70, 70));
+                b.setFocusPainted(false);
+                b.setBorderPainted(false);
+                b.setOpaque(true);
+
+                boolean oscura = (fila + col) % 2 == 1;
+
+                b.setBackground(
+                        oscura
+                                ? new Color(120, 80, 50)
+                                : new Color(240, 220, 180)
+                );
+
+                if (oscura) {
+                    final int f = fila;
+                    final int c = col;
+                    b.addActionListener(e -> alHacerClic(f, c));
+                } else {
+                    b.setEnabled(false);
+                }
+
+                casillas[fila][col] = b;
+                panelTablero.add(b);
+            }
+        }
+
+        colocarFichasIniciales();
+
+        panelTablero.revalidate();
+        panelTablero.repaint();
+    }
+
+    private void colocarFichasIniciales() {
+        for (int fila = 0; fila < 8; fila++) {
+            for (int col = 0; col < 8; col++) {
+                if ((fila + col) % 2 == 1) {
+                    if (fila < 3) casillas[fila][col].setText("●");      // negras
+                    else if (fila > 4) casillas[fila][col].setText("○"); // blancas
+                }
+            }
+        }
+    }
+
+    private void alHacerClic(int fila, int col) {System.out.println("Clic en " + fila + "," + col);}
+
+    public JButton getCasilla(int x, int y) {return casillas[x][y];}
 }
