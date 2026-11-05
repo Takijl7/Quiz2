@@ -48,4 +48,18 @@ public class Ficha {
     public void setId(String id) {
         this.id = id;
     }
+
+
+    // Devuelve la posicion en notacion algebraica.
+    // posX representa la fila y posY la columna.
+    public String getCoordenada() {
+        return "" + (char) ('a' + posY) + (posX + 1);
+    }
+
+    // Actualiza la posicion recibida desde el cliente.
+    public void setPosicion(int columna, int fila) {
+        this.posX = fila;
+        this.posY = columna;
+    }
+
 }

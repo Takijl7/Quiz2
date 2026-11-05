@@ -14,8 +14,8 @@ public class ConexionMySQL {
     public static final int PUERTO = Integer.getInteger("quiz2.db.puerto", 3306);
     public static final String URL = "jdbc:mysql://" + HOST + ":" + PUERTO + "/" + BASE_DATOS + "?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
     public static final String URL_SERVIDOR = "jdbc:mysql://" + HOST + ":" + PUERTO + "/?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
-    public static final String USUARIO = System.getProperty("quiz2.db.usuario", "root");
-    public static final String CLAVE = System.getProperty("quiz2.db.clave", "");
+    public static final String USUARIO = System.getProperty("quiz2.db.usuario", "Aaron");
+    public static final String CLAVE = System.getProperty("quiz2.db.clave", "2424");
     public static final int TAMANO_POOL = 3;
     private static final BlockingQueue<Connection> POOL = new ArrayBlockingQueue<>(TAMANO_POOL);
     private static final Semaphore PERMISOS = new Semaphore(TAMANO_POOL);

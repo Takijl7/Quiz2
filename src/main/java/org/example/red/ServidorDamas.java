@@ -1,6 +1,7 @@
 package org.example.red;
 
 import org.example.datos.ConexionMySQL;
+import org.example.datos.Jugador;
 import org.example.datos.JugadorDAO;
 import org.example.datos.PartidaDAO;
 import org.example.logica.GestorPartida;
@@ -120,27 +121,35 @@ public class ServidorDamas {
         return asignado;
     }
 
+
     public void registrarJugador(HiloCliente cliente) {
         if (!baseDeDatosDisponible) {
             return;
         }
-        Connection conexion = null;
+
         try {
-            conexion = ConexionMySQL.obtenerConexion();
-            Jugador jugador = new JugadorDAO(conexion).registrarSiNoExiste(cliente.getUsuario());
+            Jugador jugador = new JugadorDAO()
+                    .obtenerOCrear(cliente.getUsuario());
+
             cliente.setIdJugador(jugador.id());
             cliente.setPuntosAcumulados(jugador.puntosTotales());
-            consola.registrarEnBitacora("Jugador " + cliente.getUsuario() + " registrado con "
-                    + jugador.puntosTotales() + " punto(s) acumulados.");
+
+            consola.registrarEnBitacora(
+                    "Jugador " + cliente.getUsuario()
+                            + " registrado con "
+                            + jugador.puntosTotales()
+                            + " punto(s) acumulados."
+            );
+
         } catch (SQLException e) {
             baseDeDatosDisponible = false;
-            consola.mostrarAviso("No se pudo registrar al jugador en MySQL: " + e.getMessage());
-        } finally {
-            if (conexion != null) {
-                ConexionMySQL.devolverConexion(conexion);
-            }
+            consola.mostrarAviso(
+                    "No se pudo registrar al jugador en MySQL: "
+                            + e.getMessage()
+            );
         }
     }
+
 
     public synchronized void registrarCliente(HiloCliente cliente) {
         clientes.add(cliente);
@@ -193,3 +202,4 @@ public class ServidorDamas {
             }
         }, GestorPartida.TIEMPO_TURNO_CONFIGURABLE, TimeUnit.MILLISECONDS);
     }
+}

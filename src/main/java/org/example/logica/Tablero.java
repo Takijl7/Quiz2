@@ -16,15 +16,16 @@ public class Tablero {
 
                 String id = i + "," + j;
 
-                // Primeras tres filas: fichas blancas
+                // Filas 1, 2 y 3: fichas negras
                 if (i < 3 && (i + j) % 2 == 0) {
+                    tablero[i][j] = new Ficha(id, i, j, TipoFicha.NEGRA);
+                }
+
+                // Filas 6, 7 y 8: fichas blancas
+                else if (i > 4 && (i + j) % 2 == 0) {
                     tablero[i][j] = new Ficha(id, i, j, TipoFicha.BLANCA);
                 }
 
-                // Últimas tres filas: fichas negras
-                else if (i > 4 && (i + j) % 2 == 0) {
-                    tablero[i][j] = new Ficha(id, i, j, TipoFicha.NEGRA);
-                }
             }
         }
     }
@@ -87,34 +88,53 @@ public class Tablero {
         return false;
     }
 
-    public boolean desplazamientoValido(Ficha f, int nX, int nY){
+
+    public boolean desplazamientoValido(Ficha f, int nX, int nY) {
+
+        if (f == null || !dentro(nX, nY)) {
+            return false;
+        }
+
         int x = f.getPosX();
         int y = f.getPosY();
 
-        //Validamos la posicion final y la direcion, si es reina cualquier direccion es compatible
-        if(dentro(nX,nY) && tablero[nX][nY] == null){
-
-            //Comprobamos el movimiento en diagonal
-            if (esDiagonal(f, nX, nY)) {
-
-                if(f.getTipo() == TipoFicha.REINA) {
-                    return true;
-
-                    //Comprovamos que el movimiento sea una casilla
-                } else if (Math.abs(f.getPosX() - nX) == Math.abs(f.getPosY() - nY)
-                        && f.getPosX() == nX
-                        && Math.abs(f.getPosX() - nX) == 1) {
-                    if (f.getTipo() == TipoFicha.BLANCA) {
-                        return nY > y;
-                    }
-                    if (f.getTipo() == TipoFicha.NEGRA) {
-                        return nY < y;
-                    }
-                }
-            }
+        // Verificamos que la ficha exista en su posicion.
+        if (!dentro(x, y) || tablero[x][y] != f) {
+            return false;
         }
+
+        // El destino debe ser una casilla oscura vacia.
+        if ((nX + nY) % 2 != 0 || tablero[nX][nY] != null) {
+            return false;
+        }
+
+        int diferenciaX = nX - x;
+        int diferenciaY = nY - y;
+
+        // El movimiento normal es una casilla diagonal.
+        if (Math.abs(diferenciaX) != 1 ||
+                Math.abs(diferenciaY) != 1) {
+            return false;
+        }
+
+        // La reina puede avanzar o retroceder.
+        if (f.getTipo() == TipoFicha.REINA) {
+            return true;
+        }
+
+        // Las negras avanzan hacia la fila 8.
+        if (f.getTipo() == TipoFicha.NEGRA) {
+            return diferenciaX == 1;
+        }
+
+        // Las blancas avanzan hacia la fila 1.
+        if (f.getTipo() == TipoFicha.BLANCA) {
+            return diferenciaX == -1;
+        }
+
         return false;
     }
+
 
     public boolean comerValido(Ficha f, int nX, int nY){
         int x = f.getPosX();
@@ -156,4 +176,77 @@ public class Tablero {
     public boolean empate(){//todo
         return false;
     }
+
+
+    // Tamaño del tablero de damas.
+    public static final int TAMANIO = 8;
+
+    // Comprueba coordenadas como a1, b6 o h8.
+    public static boolean coordenadaValida(String coordenada) {
+        return coordenada != null
+                && coordenada.matches("(?i)[a-h][1-8]");
+    }
+
+    public static int columnaDe(String coordenada) {
+        if (!coordenadaValida(coordenada)) {
+            throw new IllegalArgumentException(
+                    "Coordenada invalida: " + coordenada);
+        }
+        return Character.toLowerCase(coordenada.charAt(0)) - 'a';
+    }
+
+    public static int filaDe(String coordenada) {
+        if (!coordenadaValida(coordenada)) {
+            throw new IllegalArgumentException(
+                    "Coordenada invalida: " + coordenada);
+        }
+        return coordenada.charAt(1) - '1';
+    }
+
+    public static String coordenada(int columna, int fila) {
+        if (columna < 0 || columna >= TAMANIO
+                || fila < 0 || fila >= TAMANIO) {
+            throw new IllegalArgumentException(
+                    "Posicion fuera del tablero");
+        }
+        return "" + (char) ('a' + columna) + (fila + 1);
+    }
+
+    // Identifica el bando según el caracter recibido del servidor.
+    public static Lado ladoDe(char simbolo) {
+        return switch (simbolo) {
+            case 'B', 'R' -> Lado.BLANCO;
+            case 'N', 'r' -> Lado.NEGRO;
+            default -> null;
+        };
+    }
+
+    // Crea las 12 fichas iniciales de un jugador.
+    public static java.util.List<Ficha> fichasIniciales(Lado lado) {
+        java.util.List<Ficha> fichas = new java.util.ArrayList<>();
+
+        if (lado == null) {
+            throw new IllegalArgumentException(
+                    "Bando no especificado");
+        }
+
+        int primeraFila = lado == Lado.NEGRO ? 0 : 5;
+
+        TipoFicha tipo = lado == Lado.NEGRO
+                ? TipoFicha.NEGRA : TipoFicha.BLANCA;
+
+        for (int fila = primeraFila; fila < primeraFila + 3; fila++) {
+            for (int columna = 0; columna < TAMANIO; columna++) {
+                if ((fila + columna) % 2 == 0) {
+                    String id = lado.name() + "-" + (fichas.size() + 1);
+
+                    fichas.add(new Ficha(
+                            id, fila, columna, tipo));
+                }
+            }
+        }
+
+        return fichas;
+    }
+
 }

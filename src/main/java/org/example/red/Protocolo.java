@@ -64,4 +64,31 @@ public final class Protocolo {
     public static String result(String resultado, int puntos) {
         return RESULT + SEPARADOR_COMANDO + resultado + SEPARADOR_CAMPOS + puntos;
     }
+    // Salto de línea para enviar mensajes por socket
+    public static final String FIN_LINEA = "\n";
+
+    // Obtiene el tipo de mensaje recibido
+    public static String tipoDe(String linea) {
+        return parsear(linea).comando();
+    }
+
+    // Obtiene los campos del mensaje
+    public static String[] camposDe(String linea) {
+        return campos(parsear(linea).argumentos());
+    }
+
+    // Genera un mensaje de movimiento
+    public static String movimiento(String origen, String destino) {
+        return mov(origen, destino);
+    }
+
+    // Genera un mensaje con el estado del tablero
+    public static String estado(String tablero64) {
+        return state(tablero64);
+    }
+
+    // Genera un mensaje con comando y contenido
+    public static String mensaje(String comando, String contenido) {
+        return comando + SEPARADOR_COMANDO + contenido;
+    }
 }
