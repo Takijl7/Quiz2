@@ -1,9 +1,11 @@
 package org.example.red;
 
 import org.example.datos.ConexionMySQL;
+import org.example.datos.FilaRanking;
 import org.example.datos.Jugador;
 import org.example.datos.JugadorDAO;
 import org.example.datos.PartidaDAO;
+import org.example.datos.RegistroPartida;
 import org.example.logica.GestorPartida;
 import org.example.logica.Lado;
 import org.example.logica.ResultadoPartida;
@@ -12,7 +14,8 @@ import org.example.presentacion.ConsolaServidor;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.sql.Connection;
+import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -28,64 +31,59 @@ import java.util.concurrent.TimeUnit;
 
 public class ServidorDamas {
     public static final int PUERTO_POR_DEFECTO = 5050;
-    private static final int MAX_JUGADORES = 2;
     private final int puerto;
     private final GestorPartida gestor = new GestorPartida();
     private final ConsolaServidor consola = new ConsolaServidor();
     private final List<HiloCliente> clientes = new ArrayList<>();
     private final Set<Lado> bandosAsignados = new HashSet<>();
-    private final ExecutorService executor = Executors.newFixedThreadPool(MAX_JUGADORES);
-    private final ScheduledExecutorService programador = Executors.newSingleThreadScheduledExecutor();
+    private final ExecutorService executor = Executors.newFixedThreadPool(2);
+    private final ScheduledExecutorService reloj = Executors.newSingleThreadScheduledExecutor();
     private final CountDownLatch finPartida = new CountDownLatch(1);
     private ServerSocket serverSocket;
-    private ScheduledFuture<?> temporizador;
+    private ScheduledFuture<?> alarma;
+    private long versionTurno;
     private volatile boolean cerrado;
     private boolean partidaIniciada;
     private boolean partidaCerrada;
-    private LocalDateTime inicioPartida;
     private boolean baseDeDatosDisponible;
+    private LocalDateTime inicioPartida;
 
-    public ServidorDamas(int puerto) {
-        this.puerto = puerto;
-    }
+    public ServidorDamas(int puerto) { this.puerto = puerto; }
 
     public static void main(String[] args) {
-        // Salida en UTF-8 explícito, como exige el punto 6.7 del enunciado.
-        System.setOut(new java.io.PrintStream(System.out, true, java.nio.charset.StandardCharsets.UTF_8));
-        System.setErr(new java.io.PrintStream(System.err, true, java.nio.charset.StandardCharsets.UTF_8));
-
         int puerto = PUERTO_POR_DEFECTO;
         if (args.length > 0) {
             try {
                 puerto = Integer.parseInt(args[0]);
+                if (puerto < 1 || puerto > 65535) throw new NumberFormatException();
             } catch (NumberFormatException e) {
-                System.err.println("[Servidor] Puerto inválido: '" + args[0]
-                        + "'. Se usará el puerto por defecto " + PUERTO_POR_DEFECTO + ".");
+                System.err.println("Puerto inválido: " + args[0]);
+                return;
             }
         }
         iniciar(puerto);
     }
 
-    public static void iniciar(int puerto) {
-        new ServidorDamas(puerto).ejecutar();
-    }
+    public static void iniciar(int puerto) { new ServidorDamas(puerto).ejecutar(); }
 
     public void ejecutar() {
         try {
             prepararBaseDeDatos();
-            try (ServerSocket socketServidor = new ServerSocket(puerto)) {
-                this.serverSocket = socketServidor;
+            try (ServerSocket servidor = new ServerSocket(puerto)) {
+                serverSocket = servidor;
                 consola.mostrarEncabezado(puerto);
-                int recibidas = 0;
-                while (recibidas < MAX_JUGADORES && !cerrado) {
-                    Socket conexion = socketServidor.accept();
-                    recibidas++;
+                int aceptados = 0;
+                while (!cerrado && aceptados < 2) {
+                    Socket conexion = servidor.accept();
+                    aceptados++;
                     executor.submit(new HiloCliente(conexion, this));
                 }
                 finPartida.await();
             }
+        } catch (SocketException e) {
+            if (!cerrado) consola.mostrarError("Socket: " + e.getMessage());
         } catch (IOException e) {
-            consola.mostrarError("Error de entrada/salida en el servidor: " + e.getMessage());
+            consola.mostrarError("Error de red: " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
@@ -97,77 +95,129 @@ public class ServidorDamas {
         try {
             ConexionMySQL.asegurarEsquema();
             baseDeDatosDisponible = true;
-            consola.mostrarMensaje("MySQL listo en " + ConexionMySQL.HOST + ":" + ConexionMySQL.PUERTO
-                    + " (base '" + ConexionMySQL.BASE_DATOS + "').");
+            consola.mostrarMensaje("MySQL disponible.");
         } catch (SQLException e) {
             baseDeDatosDisponible = false;
-            consola.mostrarAviso("MySQL no está disponible (" + e.getMessage()
-                    + "). La partida se puede jugar, pero el resultado no se guardará.");
+            consola.mostrarAviso("Sin MySQL: " + e.getMessage());
         }
     }
 
     public synchronized Lado asignarBando(Lado preferido) {
-        Lado asignado = null;
-        if (preferido != null && !bandosAsignados.contains(preferido)) {
-            asignado = preferido;
-        } else if (!bandosAsignados.contains(Lado.NEGRO)) {
-            asignado = Lado.NEGRO;
-        } else if (!bandosAsignados.contains(Lado.BLANCO)) {
-            asignado = Lado.BLANCO;
-        }
-        if (asignado != null) {
-            bandosAsignados.add(asignado);
-        }
-        return asignado;
+        if (partidaIniciada || partidaCerrada || bandosAsignados.size() >= 2) return null;
+        Lado elegido = !bandosAsignados.contains(preferido) ? preferido
+                : (preferido == Lado.BLANCO ? Lado.NEGRO : Lado.BLANCO);
+        if (elegido == null || bandosAsignados.contains(elegido)) return null;
+        bandosAsignados.add(elegido);
+        return elegido;
     }
-
 
     public void registrarJugador(HiloCliente cliente) {
-        if (!baseDeDatosDisponible) {
-            return;
-        }
-
+        if (!baseDeDatosDisponible) return;
         try {
-            Jugador jugador = new JugadorDAO()
-                    .obtenerOCrear(cliente.getUsuario());
-
+            Jugador jugador = new JugadorDAO().obtenerOCrear(cliente.getUsuario());
             cliente.setIdJugador(jugador.id());
             cliente.setPuntosAcumulados(jugador.puntosTotales());
-
-            consola.registrarEnBitacora(
-                    "Jugador " + cliente.getUsuario()
-                            + " registrado con "
-                            + jugador.puntosTotales()
-                            + " punto(s) acumulados."
-            );
-
+            consola.registrarEnBitacora("Jugador " + cliente.getUsuario() + " registrado.");
         } catch (SQLException e) {
             baseDeDatosDisponible = false;
-            consola.mostrarAviso(
-                    "No se pudo registrar al jugador en MySQL: "
-                            + e.getMessage()
-            );
+            consola.mostrarAviso("No se registró jugador: " + e.getMessage());
         }
     }
-
 
     public synchronized void registrarCliente(HiloCliente cliente) {
+        // Evita que dos participantes jueguen con el mismo usuario.
+        for (HiloCliente otro : clientes) {
+            if (otro.getUsuario().equalsIgnoreCase(cliente.getUsuario())) {
+                cliente.enviar(Protocolo.err("El usuario ya está conectado"));
+                cliente.cerrarForzado();
+                bandosAsignados.remove(cliente.getLado());
+                return;
+            }
+        }
         clientes.add(cliente);
-        if (clientes.size() == MAX_JUGADORES && !partidaIniciada) {
-            iniciarPartida();
+        cliente.setProcesadorMovimiento((origen, destino) -> procesarMovimiento(cliente, origen, destino));
+        cliente.setAlDesconectar(() -> desconectarCliente(cliente));
+        consola.registrarEnBitacora(cliente.getUsuario() + " conectado: " + cliente.getLado());
+        if (clientes.size() == 2 && !partidaIniciada) iniciarPartida();
+    }
+
+    private synchronized void iniciarPartida() {
+        partidaIniciada = true;
+        inicioPartida = LocalDateTime.now();
+        gestor.iniciarPartida(Lado.BLANCO);
+        consola.registrarEnBitacora("Partida iniciada.");
+        broadcast(Protocolo.estado(gestor.estadoTablero()));
+        broadcast(Protocolo.turn(gestor.getTurnoActual()));
+        mostrarEstadoEnConsola();
+        iniciarTemporizador();
+    }
+
+    public synchronized void procesarMovimiento(HiloCliente cliente, String origen, String destino) {
+        if (!partidaIniciada || partidaCerrada || !clientes.contains(cliente)) {
+            cliente.enviar(Protocolo.err("La partida no está activa"));
+            return;
+        }
+        GestorPartida.RespuestaMovimiento respuesta =
+                gestor.procesarMovimiento(cliente.getLado(), origen, destino);
+        if (!respuesta.aceptado()) {
+            cliente.enviar(Protocolo.err(respuesta.motivo()));
+            return;
+        }
+        cancelarTemporizador();
+        cliente.enviar(Protocolo.OK);
+        if (respuesta.captura()) cliente.enviar(Protocolo.CAPTURE);
+        if (respuesta.coronacion()) cliente.enviar(Protocolo.KING);
+        consola.registrarEnBitacora(cliente.getUsuario() + ": " + origen + " -> " + destino);
+        broadcast(Protocolo.estado(gestor.estadoTablero()));
+        mostrarEstadoEnConsola();
+        if (respuesta.resultado() != null) {
+            cerrarPartida(respuesta.resultado());
+        } else {
+            broadcast(Protocolo.turn(gestor.getTurnoActual()));
+            iniciarTemporizador();
         }
     }
 
-    private void iniciarPartida() {
-        partidaIniciada = true;
-        Lado primerBando = Lado.BLANCO;
-        gestor.iniciarPartida(primerBando);
-        inicioPartida = LocalDateTime.now();
-        consola.registrarEnBitacora("Partida iniciada. Juega primero " + primerBando + ".");
-        broadcast(Protocolo.estado(gestor.estadoTablero()));
-        broadcast(Protocolo.mensaje(Protocolo.TURN, primerBando.name()));
-        mostrarEstadoEnConsola();
-        iniciarTemporizador();
+    private synchronized void desconectarCliente(HiloCliente cliente) {
+        if (cerrado || partidaCerrada) return;
+        consola.registrarEnBitacora("Desconectado: " + cliente.getUsuario());
+        if (!partidaIniciada) {
+            clientes.remove(cliente);
+            bandosAsignados.remove(cliente.getLado());
+            // Como ya se aceptó un socket, esta partida no admitirá otro ingreso.
+            // Liberamos la espera si ya no queda nadie en la partida.
+            if (clientes.isEmpty()) finPartida.countDown();
+            return;
+        }
+        gestor.jugadorDesconectado(cliente.getLado());
+        cerrarPartida(gestor.getResultado());
+    }
+
+    public synchronized void iniciarTemporizador() {
+        cancelarTemporizador();
+        Lado lado = gestor.getTurnoActual();
+        long version = versionTurno;
+        alarma = reloj.schedule(() -> {
+            synchronized (ServidorDamas.this) {
+                if (partidaCerrada || version != versionTurno) return;
+                if (!gestor.expirarTurno(lado)) return;
+                broadcast(Protocolo.TIMEOUT);
+                consola.registrarEnBitacora("Tiempo agotado: " + lado);
+                if (gestor.estaTerminada()) cerrarPartida(gestor.getResultado());
+                else {
+                    broadcast(Protocolo.turn(gestor.getTurnoActual()));
+                    iniciarTemporizador();
+                }
+            }
+        }, GestorPartida.TIEMPO_TURNO_CONFIGURABLE, TimeUnit.MILLISECONDS);
+    }
+
+    public synchronized void cancelarTemporizador() {
+        versionTurno++;
+        if (alarma != null) {
+            alarma.cancel(false);
+            alarma = null;
+        }
     }
 
     public void mostrarEstadoEnConsola() {
@@ -175,224 +225,89 @@ public class ServidorDamas {
         consola.mostrarTurno(String.valueOf(gestor.getTurnoActual()));
     }
 
-    public void broadcast(String mensaje) {
-        List<HiloCliente> copia;
-        synchronized (this) {
-            copia = new ArrayList<>(clientes);
-        }
-        for (HiloCliente cliente : copia) {
-            cliente.enviar(mensaje);
-        }
+    public synchronized void broadcast(String mensaje) {
+        for (HiloCliente cliente : new ArrayList<>(clientes)) cliente.enviar(mensaje);
     }
 
-    public void iniciarTemporizador() {
-        cancelarTemporizador();
-        Lado lado = gestor.getTurnoActual();
-        temporizador = programador.schedule(() -> {
-            if (!gestor.expirarTurno(lado)) {
-                return;
-            }
-            broadcast(Protocolo.TIMEOUT);
-            consola.registrarEnBitacora("Se agotó el tiempo de " + lado + "; el turno pasó al rival.");
-            if (gestor.estaTerminada()) {
-                cerrarPartida(gestor.getResultado());
-            } else {
-                broadcast(Protocolo.mensaje(Protocolo.TURN, gestor.getTurnoActual().name()));
-                iniciarTemporizador();
-            }
-        }, GestorPartida.TIEMPO_TURNO_CONFIGURABLE, TimeUnit.MILLISECONDS);
-    }
-
-    // Cancela el temporizador anterior al cambiar de turno.
-    public synchronized void cancelarTemporizador() {
-        if (temporizador != null) {
-            temporizador.cancel(false);
-            temporizador = null;
-        }
-    }
-
-    // Finaliza la partida y comunica el resultado.
     public synchronized void cerrarPartida(ResultadoPartida resultado) {
-
-        if (partidaCerrada) {
-            return;
-        }
-
+        if (partidaCerrada) return;
         partidaCerrada = true;
         cancelarTemporizador();
-
         if (resultado == null) {
-            consola.mostrarAviso(
-                    "La partida terminó sin resultado definido.");
+            consola.mostrarAviso("Partida finalizada sin resultado.");
             finPartida.countDown();
             return;
         }
-
-        if (resultado == ResultadoPartida.EMPATE) {
-            broadcast(Protocolo.DRAW);
-        } else if (resultado == ResultadoPartida.VICTORIA_BLANCO) {
-            broadcast(Protocolo.win(Lado.BLANCO));
-        } else if (resultado == ResultadoPartida.VICTORIA_NEGRO) {
-            broadcast(Protocolo.win(Lado.NEGRO));
+        switch (resultado) {
+            case EMPATE -> broadcast(Protocolo.DRAW);
+            case VICTORIA_BLANCO -> broadcast(Protocolo.win(Lado.BLANCO));
+            case VICTORIA_NEGRO -> broadcast(Protocolo.win(Lado.NEGRO));
         }
-
         String estado = gestor.estadoTablero();
-        int piezasBlancas = 0;
-        int piezasNegras = 0;
-
-        if (estado != null && estado.length() == 64) {
-            for (char ficha : estado.toCharArray()) {
-                if (ficha == 'B' || ficha == 'R') {
-                    piezasBlancas++;
-                } else if (ficha == 'N' || ficha == 'r') {
-                    piezasNegras++;
-                }
-            }
+        int piezasBlanco = 0, piezasNegro = 0;
+        for (char c : estado.toCharArray()) {
+            if (c == 'B' || c == 'R') piezasBlanco++;
+            if (c == 'N' || c == 'r') piezasNegro++;
         }
-
-        HiloCliente blanco = null;
-        HiloCliente negro = null;
-
+        HiloCliente blanco = null, negro = null;
         for (HiloCliente cliente : clientes) {
-            if (cliente.getLado() == Lado.BLANCO) {
-                blanco = cliente;
-            } else if (cliente.getLado() == Lado.NEGRO) {
-                negro = cliente;
-            }
+            if (cliente.getLado() == Lado.BLANCO) blanco = cliente;
+            if (cliente.getLado() == Lado.NEGRO) negro = cliente;
         }
-
-        int puntosBlanco =
-                resultado == ResultadoPartida.VICTORIA_BLANCO ? 5 : 0;
-
-        int puntosNegro =
-                resultado == ResultadoPartida.VICTORIA_NEGRO ? 5 : 0;
-
         if (blanco != null && negro != null) {
-
-            String resultadoBlanco =
-                    resultado == ResultadoPartida.EMPATE
-                            ? "EMPATE"
-                            : puntosBlanco == 5 ? "VICTORIA" : "DERROTA";
-
-            String resultadoNegro =
-                    resultado == ResultadoPartida.EMPATE
-                            ? "EMPATE"
-                            : puntosNegro == 5 ? "VICTORIA" : "DERROTA";
-
-            blanco.enviar(Protocolo.result(
-                    resultadoBlanco, puntosBlanco));
-
-            negro.enviar(Protocolo.result(
-                    resultadoNegro, puntosNegro));
-
-            if (baseDeDatosDisponible
-                    && blanco.getIdJugador() > 0
-                    && negro.getIdJugador() > 0) {
-
+            int puntosBlanco = resultado == ResultadoPartida.VICTORIA_BLANCO ? 5 : 0;
+            int puntosNegro = resultado == ResultadoPartida.VICTORIA_NEGRO ? 5 : 0;
+            String resBlanco = resultado == ResultadoPartida.EMPATE ? "EMPATE" : puntosBlanco == 5 ? "VICTORIA" : "DERROTA";
+            String resNegro = resultado == ResultadoPartida.EMPATE ? "EMPATE" : puntosNegro == 5 ? "VICTORIA" : "DERROTA";
+            if (baseDeDatosDisponible && blanco.getIdJugador() > 0 && negro.getIdJugador() > 0) {
                 try {
-                    org.example.datos.RegistroPartida registro =
-                            new org.example.datos.RegistroPartida(
-                                    inicioPartida,
-                                    LocalDateTime.now(),
-                                    resultado.name(),
-                                    blanco.getIdJugador(),
-                                    negro.getIdJugador(),
-                                    puntosBlanco,
-                                    puntosNegro,
-                                    resultadoBlanco,
-                                    resultadoNegro,
-                                    piezasBlancas,
-                                    piezasNegras
-                            );
-
-                    int idPartida =
-                            new PartidaDAO().registrarPartida(registro);
-
-                    consola.registrarEnBitacora(
-                            "Partida registrada en MySQL. ID: "
-                                    + idPartida);
-
+                    RegistroPartida registro = new RegistroPartida(inicioPartida, LocalDateTime.now(),
+                            resultado.name(), blanco.getIdJugador(), negro.getIdJugador(),
+                            puntosBlanco, puntosNegro, resBlanco, resNegro, piezasBlanco, piezasNegro);
+                    int id = new PartidaDAO().registrarPartida(registro);
+                    consola.registrarEnBitacora("Partida guardada: #" + id);
                     mostrarRanking();
-
                 } catch (SQLException e) {
-                    consola.mostrarError(
-                            "No se pudo guardar la partida: "
-                                    + e.getMessage());
+                    consola.mostrarError("No se pudo guardar la partida: " + e.getMessage());
                 }
             }
+            blanco.enviar(Protocolo.result(resBlanco, puntosBlanco));
+            negro.enviar(Protocolo.result(resNegro, puntosNegro));
         }
-
-        consola.registrarEnBitacora(
-                "Partida finalizada: " + resultado);
-
+        consola.registrarEnBitacora("Resultado final: " + resultado);
         finPartida.countDown();
     }
 
-    // Consulta los puntos acumulados desde MySQL.
     private void mostrarRanking() {
         try {
-            consola.mostrarMensaje("=== RANKING ===");
-
-            for (org.example.datos.FilaRanking fila
-                    : new JugadorDAO().ranking()) {
-
-                consola.mostrarMensaje(
-                        fila.usuario() + " | "
-                                + fila.puntosTotales() + " puntos | "
-                                + fila.victorias() + " victorias");
-            }
-
+            for (FilaRanking fila : new JugadorDAO().ranking())
+                consola.mostrarMensaje(fila.usuario() + ": " + fila.puntosTotales() + " puntos");
         } catch (SQLException e) {
-            consola.mostrarError(
-                    "Error consultando ranking: "
-                            + e.getMessage());
+            consola.mostrarError("Error en ranking: " + e.getMessage());
         }
     }
 
-    // Libera recursos del servidor.
-    public void cerrar() {
-
-        if (cerrado) {
-            return;
-        }
-
+    public synchronized void cerrar() {
+        if (cerrado) return;
         cerrado = true;
         cancelarTemporizador();
-
-        for (HiloCliente cliente : clientes) {
-            cliente.cerrarForzado();
-        }
-
-        if (serverSocket != null && !serverSocket.isClosed()) {
-            try {
-                serverSocket.close();
-            } catch (IOException e) {
-                consola.mostrarAviso(
-                        "Error cerrando socket: " + e.getMessage());
+        for (HiloCliente cliente : clientes) cliente.cerrarForzado();
+        if (serverSocket != null) {
+            try { serverSocket.close(); } catch (IOException e) {
+                consola.mostrarAviso("Error al cerrar socket: " + e.getMessage());
             }
         }
-
         executor.shutdown();
-        programador.shutdown();
-
+        reloj.shutdown();
         try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-
-            if (!programador.awaitTermination(5, TimeUnit.SECONDS)) {
-                programador.shutdownNow();
-            }
-
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) executor.shutdownNow();
+            if (!reloj.awaitTermination(5, TimeUnit.SECONDS)) reloj.shutdownNow();
         } catch (InterruptedException e) {
             executor.shutdownNow();
-            programador.shutdownNow();
+            reloj.shutdownNow();
             Thread.currentThread().interrupt();
         }
-
         ConexionMySQL.cerrarPool();
-
         consola.mostrarMensaje("Servidor finalizado.");
     }
-
 }
