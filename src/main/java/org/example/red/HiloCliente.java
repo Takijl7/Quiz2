@@ -16,10 +16,6 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 
-/**
- * Atiende a un jugador conectado mediante
- * su propio hilo de servidor.
- */
 public class HiloCliente implements Runnable {
 
     private static final int TIMEOUT_LECTURA_MS = 30_000;
@@ -249,10 +245,6 @@ public class HiloCliente implements Runnable {
             return;
         }
 
-        /*
-         * El servidor es la autoridad del tablero.
-         * Este hilo solo recibe y entrega la jugada.
-         */
         BiConsumer<String, String> procesador =
                 procesadorMovimiento;
 
@@ -265,10 +257,6 @@ public class HiloCliente implements Runnable {
         procesador.accept(origen, destino);
     }
 
-    /*
-     * Los mensajes se envian de manera sincronizada
-     * para evitar que varios hilos mezclen la salida.
-     */
     public synchronized void enviar(String mensaje) {
 
         if (!activo || salida == null) {

@@ -3,10 +3,6 @@ package org.example.logica;
 
 import java.util.concurrent.locks.ReentrantLock;
 
-/**
- * Controla los turnos, movimientos y resultado de la partida.
- * El servidor se encarga de sockets, temporizador y MySQL.
- */
 public class GestorPartida {
 
     public static final long TIEMPO_TURNO_CONFIGURABLE = 120_000L;
@@ -20,9 +16,6 @@ public class GestorPartida {
     private boolean iniciada;
     private int caducidadesConsecutivas;
 
-    /**
-     * Informa al servidor qué ocurrió con una jugada.
-     */
     public record RespuestaMovimiento(
             boolean aceptado,
             boolean captura,
@@ -31,9 +24,6 @@ public class GestorPartida {
             ResultadoPartida resultado
     ) {}
 
-    /**
-     * Prepara el tablero y establece el primer turno.
-     */
     public void iniciarPartida(Lado primerBando) {
 
         candado.lock();
@@ -54,10 +44,6 @@ public class GestorPartida {
         }
     }
 
-    /**
-     * Valida y ejecuta un movimiento.
-     * Solo un hilo puede modificar el tablero a la vez.
-     */
     public RespuestaMovimiento procesarMovimiento(
             Lado lado, String origen, String destino) {
 
@@ -153,12 +139,6 @@ public class GestorPartida {
         }
     }
 
-    /**
-     * Expira el turno si todavía corresponde al
-     * bando indicado por el temporizador.
-     *
-     * Dos caducidades consecutivas producen empate.
-     */
     public boolean expirarTurno(Lado esperado) {
 
         candado.lock();
@@ -185,10 +165,6 @@ public class GestorPartida {
         }
     }
 
-    /**
-     * Si un jugador abandona durante la partida,
-     * el rival gana.
-     */
     public void jugadorDesconectado(Lado lado) {
 
         candado.lock();
@@ -203,9 +179,6 @@ public class GestorPartida {
         }
     }
 
-    /**
-     * Estado del tablero en 64 caracteres.
-     */
     public String estadoTablero() {
 
         candado.lock();
